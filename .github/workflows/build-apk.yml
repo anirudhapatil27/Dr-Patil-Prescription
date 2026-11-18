@@ -1,0 +1,71 @@
+
+name: Build Dr Patil Digital OPD APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Prepare V25 application
+        run: |
+          mkdir -p www
+          cp DrPatil_Digital_OPD_V25_V22PlusBackupOnly.html www/index.html
+
+      - name: Configure Capacitor
+        run: |
+          cat > package.json <<'JSON'
+          {
+            "name": "dr-patil-digital-opd",
+            "version": "1.0.0",
+            "private": true
+          }
+          JSON
+
+          npm install @capacitor/core@6.1.2 @capacitor/android@6.1.2
+          npm install --save-dev @capacitor/cli@6.1.2
+
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "com.drpatil.digitalopd",
+            "appName": "Dr Patil Digital OPD",
+            "webDir": "www"
+          }
+          JSON
+
+          npx cap add android
+          npx cap sync android
+
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dr-Patil-Digital-OPD-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+          
