@@ -226,6 +226,16 @@ jobs:
               }catch(e){}
             }
             window.__drPatilPdfStatus=show;
+            // Diagnostic checkpoint 1: this banner must appear even if AndroidPrint is absent.
+            function diagnostics(){
+              var html2pdfReady=typeof window.html2pdf==='function';
+              var androidObject=!!window.AndroidPrint;
+              var pingReady=false;
+              try{pingReady=!!(androidObject&&typeof window.AndroidPrint.ping==='function'&&window.AndroidPrint.ping()==='DR_PATIL_PDF_BRIDGE_READY_V2');}catch(e){}
+              window.__drPatilPdfDiagnostics={javascriptLoaded:true,html2pdfLoaded:html2pdfReady,androidObjectPresent:androidObject,androidPingReady:pingReady,checkedAt:new Date().toISOString()};
+              return window.__drPatilPdfDiagnostics;
+            }
+            show('PDF diagnostic 1/3: JavaScript loaded. Checking PDF library and Android service…',false);
             function connect(){
               try{
                 if(window.AndroidPrint&&typeof window.AndroidPrint.ping==='function'&&window.AndroidPrint.ping()==='DR_PATIL_PDF_BRIDGE_READY_V2'&&typeof window.AndroidPrint.print==='function'&&typeof window.AndroidPrint.sharePdf==='function'&&typeof window.html2pdf==='function'){
@@ -285,14 +295,30 @@ jobs:
                     }
                     run();
                   };
-                  show('PDF generator and Android file-sharing service connected.',false);return true;
+                  show('PDF diagnostic 3/3: JavaScript, PDF library and Android bridge connected.',false);return true;
                 }
               }catch(e){state='error';window.__drPatilPdfBridgeState=state;show('PDF bridge error: '+String(e),true);}
               return false;
             }
             window.__drPatilPdfBridgeState=state;
             window.print=function(){show('Android PDF service is not connected. Close and reopen the app.',true);alert('Android PDF service is not connected. Please close and reopen the OPD app.');};
-            function start(){if(connect()||timer)return;timer=setInterval(function(){attempts++;if(connect()){clearInterval(timer);timer=null;}else if(attempts>=100){clearInterval(timer);timer=null;state='timeout';window.__drPatilPdfBridgeState=state;show('PDF service did not connect. Do not use this APK for PDF creation.',true);}},250);}
+            function start(){
+              var d=diagnostics();
+              if(!d.html2pdfLoaded)show('PDF diagnostic 1/3: JavaScript loaded, but html2pdf library is MISSING.',true);
+              else if(!d.androidObjectPresent)show('PDF diagnostic 2/3: JavaScript and PDF library loaded; Android bridge is NOT PRESENT.',true);
+              else if(!d.androidPingReady)show('PDF diagnostic 2/3: Android bridge object exists, but its ping check FAILED.',true);
+              else show('PDF diagnostic: JavaScript, PDF library and Android ping detected. Checking methods…',false);
+              if(connect()||timer)return;
+              timer=setInterval(function(){attempts++;var d=diagnostics();
+                if(connect()){clearInterval(timer);timer=null;}
+                else if(attempts>=100){clearInterval(timer);timer=null;state='timeout';window.__drPatilPdfBridgeState=state;
+                  if(!d.html2pdfLoaded)show('PDF diagnostic FAILED: html2pdf library did not load.',true);
+                  else if(!d.androidObjectPresent)show('PDF diagnostic FAILED: AndroidPrint interface was never injected into WebView.',true);
+                  else if(!d.androidPingReady)show('PDF diagnostic FAILED: AndroidPrint.ping() did not return the expected response.',true);
+                  else show('PDF diagnostic FAILED: Android bridge methods or PDF connection check failed.',true);
+                }
+              },250);
+            }
             if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
             document.addEventListener('visibilitychange',function(){if(!document.hidden&&state!=='connected')start();});
           })();
@@ -300,7 +326,7 @@ jobs:
           if '</body>' not in s: raise SystemExit('V25 closing body tag missing')
           s=s.replace('</body>',bridge+'\n</body>',1)
           p.write_text(s,encoding='utf-8')
-          checks=['src="html2pdf.bundle.min.js"','id="dr-patil-pdf-generator-v2"','DR_PATIL_PDF_BRIDGE_READY_V2','window.AndroidPrint.sharePdf(base64','window.AndroidPrint.print()','id="print"','id="share"','id="printFollowup"','data-print-fu','data-direct-preview','data-preop-preview']
+          checks=['src="html2pdf.bundle.min.js"','id="dr-patil-pdf-generator-v2"','PDF diagnostic 1/3: JavaScript loaded','javascriptLoaded:true','DR_PATIL_PDF_BRIDGE_READY_V2','window.AndroidPrint.sharePdf(base64','window.AndroidPrint.print()','id="print"','id="share"','id="printFollowup"','data-print-fu','data-direct-preview','data-preop-preview']
           missing=[x for x in checks if x not in s]
           if missing: raise SystemExit('PDF bridge verification failed: '+', '.join(missing))
           scripts=re.findall(r'<script\b[^>]*>(.*?)</script\s*>',s,re.I|re.S)
