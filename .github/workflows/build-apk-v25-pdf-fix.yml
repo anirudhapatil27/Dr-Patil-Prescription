@@ -1,0 +1,229 @@
+name: Build Dr Patil Digital OPD APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Prepare unchanged V25 application
+        run: |
+          set -euo pipefail
+          test -s DrPatil_Digital_OPD_V25_V22PlusBackupOnly.html
+          mkdir -p www
+          cp DrPatil_Digital_OPD_V25_V22PlusBackupOnly.html www/index.html
+
+      - name: Configure Capacitor
+        run: |
+          set -euo pipefail
+          cat > package.json <<'JSON'
+          {
+            "name": "dr-patil-digital-opd",
+            "version": "1.0.0",
+            "private": true
+          }
+          JSON
+
+          npm install @capacitor/core@6.1.2 @capacitor/android@6.1.2
+          npm install --save-dev @capacitor/cli@6.1.2
+
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "com.drpatil.digitalopd",
+            "appName": "Dr Patil Digital OPD",
+            "webDir": "www"
+          }
+          JSON
+
+          npx cap add android
+          npx cap sync android
+
+      - name: Add native Android print bridge
+        run: |
+          set -euo pipefail
+          mkdir -p android/app/src/main/java/com/drpatil/digitalopd
+          cat > android/app/src/main/java/com/drpatil/digitalopd/MainActivity.java <<'JAVA'
+          package com.drpatil.digitalopd;
+
+          import android.content.Context;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.print.PrintAttributes;
+          import android.print.PrintManager;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebView;
+          import android.widget.Toast;
+
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
+              private boolean printBridgeInstalled = false;
+
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  installPrintBridgeWhenReady(0);
+              }
+
+              private void installPrintBridgeWhenReady(int attempt) {
+                  if (printBridgeInstalled) return;
+
+                  WebView webView = (bridge == null) ? null : bridge.getWebView();
+                  if (webView == null) {
+                      if (attempt < 60) {
+                          mainHandler.postDelayed(
+                              () -> installPrintBridgeWhenReady(attempt + 1), 250
+                          );
+                      } else {
+                          Toast.makeText(this,
+                              "Android printing could not initialise. Please restart the app.",
+                              Toast.LENGTH_LONG).show();
+                      }
+                      return;
+                  }
+
+                  printBridgeInstalled = true;
+                  webView.addJavascriptInterface(new AndroidPrintBridge(this, webView), "AndroidPrint");
+                  webView.postDelayed(webView::reload, 350);
+              }
+
+              public static class AndroidPrintBridge {
+                  private final Context context;
+                  private final WebView webView;
+                  private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+                  AndroidPrintBridge(Context context, WebView webView) {
+                      this.context = context;
+                      this.webView = webView;
+                  }
+
+                  @JavascriptInterface
+                  public String ping() {
+                      return "DR_PATIL_PRINT_BRIDGE_OK";
+                  }
+
+                  @JavascriptInterface
+                  public void print() {
+                      mainHandler.post(() -> {
+                          try {
+                              PrintManager manager = (PrintManager) context.getSystemService(Context.PRINT_SERVICE);
+                              if (manager == null) {
+                                  Toast.makeText(context, "Android printing is unavailable.", Toast.LENGTH_LONG).show();
+                                  return;
+                              }
+
+                              String jobName = "Dr Patil Digital OPD";
+                              PrintAttributes attributes = new PrintAttributes.Builder()
+                                  .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                                  .setResolution(new PrintAttributes.Resolution("opd", "OPD", 300, 300))
+                                  .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                                  .build();
+
+                              manager.print(
+                                  jobName,
+                                  webView.createPrintDocumentAdapter(jobName),
+                                  attributes
+                              );
+                          } catch (Exception e) {
+                              Toast.makeText(context,
+                                  "Unable to open PDF/print dialog: " + e.getMessage(),
+                                  Toast.LENGTH_LONG).show();
+                          }
+                      });
+                  }
+              }
+          }
+          JAVA
+
+      - name: Connect V25 print buttons to Android printing
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("www/index.html")
+          s = p.read_text(encoding="utf-8")
+
+          marker = 'id="android-print-bridge"'
+          if marker not in s:
+              bridge_script = r'''<script id="android-print-bridge">
+          (function () {
+            function connectAndroidPrint() {
+              try {
+                if (window.AndroidPrint &&
+                    typeof window.AndroidPrint.ping === "function" &&
+                    window.AndroidPrint.ping() === "DR_PATIL_PRINT_BRIDGE_OK" &&
+                    typeof window.AndroidPrint.print === "function") {
+                  window.print = function () {
+                    window.AndroidPrint.print();
+                  };
+                  return true;
+                }
+              } catch (e) {}
+              return false;
+            }
+
+            if (!connectAndroidPrint()) {
+              var attempts = 0;
+              var timer = setInterval(function () {
+                attempts += 1;
+                if (connectAndroidPrint() || attempts >= 80) {
+                  clearInterval(timer);
+                }
+              }, 250);
+            }
+          })();
+          </script>'''
+              if "</body>" not in s:
+                  raise SystemExit("ERROR: </body> not found in V25 HTML")
+              s = s.replace("</body>", bridge_script + "\n</body>", 1)
+              p.write_text(s, encoding="utf-8")
+
+          if 'id="android-print-bridge"' not in s:
+              raise SystemExit("ERROR: Android print bridge injection failed")
+          if "DR_PATIL_PRINT_BRIDGE_OK" not in s:
+              raise SystemExit("ERROR: Android bridge handshake missing")
+          if "window.print = function" not in s:
+              raise SystemExit("ERROR: window.print connection missing")
+          print("V25 source preserved; Android print bridge added to build copy only.")
+          PY
+
+      - name: Build Android APK
+        run: |
+          set -euo pipefail
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dr-Patil-Digital-OPD-V25-PDF-Fix
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
