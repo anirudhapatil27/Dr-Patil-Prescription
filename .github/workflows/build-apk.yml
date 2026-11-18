@@ -334,6 +334,21 @@ jobs:
           print('All existing V25 digital PDF routes now generate a PDF and open Android share/save options.')
           PY
 
+      - name: Sync final PDF files into Android assets (critical)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Capacitor copied www/ before the PDF bridge was injected. Sync again now,
+          # so the APK contains the final HTML and local html2pdf bundle.
+          npx cap sync android
+          A=android/app/src/main/assets/public/index.html
+          test -s "$A"
+          grep -q 'id="dr-patil-pdf-generator-v2"' "$A"
+          grep -q 'PDF diagnostic 1/3: JavaScript loaded' "$A"
+          grep -q 'window.AndroidPrint.sharePdf(base64' "$A"
+          test -s android/app/src/main/assets/public/html2pdf.bundle.min.js
+          echo 'Verified: final PDF bridge HTML and html2pdf library are copied into Android assets.'
+
       - name: Verify source preservation and JavaScript syntax
         shell: bash
         run: |
@@ -377,7 +392,11 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           unzip -t "$APK" >/dev/null
-          echo 'APK created; archive integrity passed.'
+          unzip -p "$APK" assets/public/index.html > /tmp/drpatil-apk-index.html
+          grep -q 'id="dr-patil-pdf-generator-v2"' /tmp/drpatil-apk-index.html
+          grep -q 'PDF diagnostic 1/3: JavaScript loaded' /tmp/drpatil-apk-index.html
+          unzip -l "$APK" | grep -q 'assets/public/html2pdf.bundle.min.js'
+          echo 'APK created; archive integrity and embedded PDF assets verified.'
           ls -lh "$APK"
 
       - name: Upload APK
